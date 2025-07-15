@@ -10,7 +10,8 @@ from flask import Flask, request
 import asyncio
 import openai
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import time
+from queue import Queue
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -47,39 +48,22 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
         logging.error(f"MACD calculation error: {e}")
         return pd.Series([np.nan] * len(prices)), pd.Series([np.nan] * len(prices))
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hi! Send a stock symbol like TCS.NS or INFY.NS to get AI stock analysis.")
-
-async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def get_stock_analysis(symbol):
+    """Synchronous function to get stock analysis"""
     try:
-        symbol = update.message.text.upper().strip()
-        
-        if not symbol or len(symbol) < 2:
-            await update.message.reply_text("Please provide a valid stock symbol (e.g., TCS.NS, INFY.NS)")
-            return
-        
-        await update.message.reply_text(f"🔍 Analyzing {symbol}... Please wait.")
-        
-        # Create a fresh ticker object for each request
         stock = yf.Ticker(symbol)
         
-        try:
-            # Get stock info and historical data
-            info = stock.info
-            hist = stock.history(period="3mo")
-        except Exception as e:
-            logging.error(f"Error fetching data for {symbol}: {e}")
-            await update.message.reply_text(f"❌ Error fetching data for {symbol}. Please check the symbol and try again.")
-            return
-
+        # Get stock info and historical data
+        info = stock.info
+        hist = stock.history(period="3mo")
+        
         if hist.empty:
-            await update.message.reply_text(f"❌ No data found for {symbol}. Please check the symbol and try again.")
-            return
-
+            return None, "No data found"
+        
         # Calculate technical indicators
         rsi_values = calculate_rsi(hist["Close"])
         macd_values, signal_values = calculate_macd(hist["Close"])
-
+        
         # Extract latest values safely
         rsi = "N/A"
         macd_val = "N/A"
@@ -91,7 +75,7 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 macd_val = round(macd_values.dropna().iloc[-1], 4)
         except Exception as e:
             logging.error(f"Error extracting indicator values: {e}")
-
+        
         # Prepare prompt for OpenAI
         prompt = f"""
 You're an AI stock analyst. Give a Buy/Sell/Hold recommendation for:
@@ -106,7 +90,7 @@ MACD: {macd_val}
 
 Provide a brief analysis in simple words with your recommendation.
 """
-
+        
         try:
             response = openai.chat.completions.create(
                 model=MODEL_ID,
@@ -114,64 +98,96 @@ Provide a brief analysis in simple words with your recommendation.
                 max_tokens=500,
                 temperature=0.7
             )
-            msg = response.choices[0].message.content
-            await update.message.reply_text(f"📈 {symbol}:\n\n{msg}")
-
+            analysis = response.choices[0].message.content
+            return analysis, None
         except Exception as e:
             logging.error(f"OpenAI API error: {e}")
-            await update.message.reply_text("❌ Failed to get analysis from AI service. Please try again.")
+            return None, "Failed to get AI analysis"
+            
+    except Exception as e:
+        logging.error(f"Error in get_stock_analysis: {e}")
+        return None, f"Error fetching data: {str(e)}"
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Hi! Send a stock symbol like TCS.NS or INFY.NS to get AI stock analysis.")
+
+async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        symbol = update.message.text.upper().strip()
+        
+        if not symbol or len(symbol) < 2:
+            await update.message.reply_text("Please provide a valid stock symbol (e.g., TCS.NS, INFY.NS)")
+            return
+        
+        await update.message.reply_text(f"🔍 Analyzing {symbol}... Please wait.")
+        
+        # Run the synchronous analysis in a thread
+        loop = asyncio.get_event_loop()
+        analysis, error = await loop.run_in_executor(None, get_stock_analysis, symbol)
+        
+        if error:
+            await update.message.reply_text(f"❌ {error}")
+        else:
+            await update.message.reply_text(f"📈 {symbol}:\n\n{analysis}")
             
     except Exception as e:
         logging.error(f"Unexpected error in analyze: {e}")
         await update.message.reply_text("❌ An unexpected error occurred. Please try again.")
 
-# Initialize Telegram app once
-telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze))
+# Create bot instance
+bot = Bot(token=TELEGRAM_TOKEN)
 
-# Initialize the app at startup
-async def initialize_app():
-    await telegram_app.initialize()
+# Message queue for processing updates
+update_queue = Queue()
 
-# Run initialization in a separate thread
-def run_initialization():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(initialize_app())
-    loop.close()
-
-# Initialize at startup
-init_thread = threading.Thread(target=run_initialization)
-init_thread.start()
-init_thread.join()
-
-# Thread pool for handling webhook requests
-executor = ThreadPoolExecutor(max_workers=5)
-
-def process_update_sync(json_data):
-    """Process update in a separate thread with its own event loop"""
-    def run_async():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+def process_updates():
+    """Background thread to process updates"""
+    while True:
         try:
-            update = Update.de_json(json_data, telegram_app.bot)
-            loop.run_until_complete(telegram_app.process_update(update))
+            json_data = update_queue.get()
+            if json_data is None:  # Shutdown signal
+                break
+            
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                # Build application
+                application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+                application.add_handler(CommandHandler("start", start))
+                application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze))
+                
+                # Process update
+                async def process():
+                    await application.initialize()
+                    update = Update.de_json(json_data, application.bot)
+                    await application.process_update(update)
+                    await application.shutdown()
+                
+                loop.run_until_complete(process())
+                
+            except Exception as e:
+                logging.error(f"Error processing update: {e}")
+            finally:
+                loop.close()
+                
         except Exception as e:
-            logging.error(f"Error processing update: {e}")
+            logging.error(f"Error in update processor: {e}")
         finally:
-            loop.close()
-    
-    return run_async()
+            update_queue.task_done()
+
+# Start background thread
+processor_thread = threading.Thread(target=process_updates, daemon=True)
+processor_thread.start()
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
         json_data = request.get_json(force=True)
         
-        # Process the update in a separate thread
-        future = executor.submit(process_update_sync, json_data)
-        # Don't wait for completion to avoid blocking
+        # Add to queue for processing
+        update_queue.put(json_data)
         
         return 'OK'
     except Exception as e:
