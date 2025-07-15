@@ -1,5 +1,5 @@
 services:
-  - type: background-worker
+  - type: web
     name: stock-telegram-bot
     env: python
     buildCommand: ./build.sh
