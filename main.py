@@ -99,7 +99,7 @@ Provide a brief analysis in simple words with your recommendation.
             response = openai.chatCompletion.create(
                 model=MODEL_ID,
                 messages=[{"role": "user", "content": prompt}],
-                timeout=30
+            
             )
             msg = response.choices[0].message["content"]
             await update.message.reply_text(f"📈 {symbol}:\n\n{msg}")
