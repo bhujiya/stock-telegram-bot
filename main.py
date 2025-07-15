@@ -8,17 +8,19 @@ import pandas as pd
 import numpy as np
 from flask import Flask, request
 import asyncio
+import openai  # ✅ Added OpenAI SDK
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-MODEL_ID = "google/gemma-3n-e2b-it:free"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # ✅ Replace OpenRouter with OpenAI
+MODEL_ID = "gpt-3.5-turbo"  # ✅ You can change to "gpt-4" if your key supports it
+
+openai.api_key = OPENAI_API_KEY  # ✅ Initialize OpenAI
 
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
 def calculate_rsi(prices, period=14):
-    """Calculate RSI manually"""
     delta = prices.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -27,7 +29,6 @@ def calculate_rsi(prices, period=14):
     return rsi
 
 def calculate_macd(prices, fast=12, slow=26, signal=9):
-    """Calculate MACD manually"""
     ema_fast = prices.ewm(span=fast).mean()
     ema_slow = prices.ewm(span=slow).mean()
     macd = ema_fast - ema_slow
@@ -94,40 +95,24 @@ MACD: {macd_val}
 Provide a brief analysis in simple words with your recommendation.
 """
 
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
-        }
-
-        data = {
-            "model": MODEL_ID,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-
         try:
-            response = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions", 
-                headers=headers, 
-                json=data,
+            response = openai.ChatCompletion.create(
+                model=MODEL_ID,
+                messages=[{"role": "user", "content": prompt}],
                 timeout=30
             )
+            msg = response.choices[0].message["content"]
+            await update.message.reply_text(f"📈 {symbol}:\n\n{msg}")
 
-            if response.status_code == 200:
-                result = response.json()
-                msg = result["choices"][0]["message"]["content"]
-                await update.message.reply_text(f"📈 {symbol}:\n\n{msg}")
-            else:
-                logging.error(f"API Error: {response.status_code} - {response.text}")
-                await update.message.reply_text("❌ Failed to get analysis from AI service.")
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Request error: {e}")
-            await update.message.reply_text("❌ Network error. Please try again.")
+        except Exception as e:
+            logging.error(f"OpenAI API error: {e}")
+            await update.message.reply_text("❌ Failed to get analysis from AI service.")
             
     except Exception as e:
         logging.error(f"Unexpected error in analyze: {e}")
         await update.message.reply_text("❌ An unexpected error occurred. Please try again.")
 
-# Create telegram application
+# Telegram App setup
 telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze))
@@ -138,7 +123,7 @@ def webhook():
         json_data = request.get_json(force=True)
 
         async def process():
-            await telegram_app.initialize()  # ✅ Properly initialize the bot
+            await telegram_app.initialize()  # ✅ required for webhook
             update = Update.de_json(json_data, telegram_app.bot)
             await telegram_app.process_update(update)
 
@@ -147,7 +132,6 @@ def webhook():
     except Exception as e:
         logging.error(f"Webhook error: {e}")
         return 'ERROR', 500
-
 
 @app.route('/health')
 def health():
