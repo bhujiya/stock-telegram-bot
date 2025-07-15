@@ -134,14 +134,20 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Handle webhook updates"""
     try:
-        update = Update.de_json(request.get_json(), telegram_app.bot)
-        asyncio.run(telegram_app.process_update(update))
+        json_data = request.get_json(force=True)
+
+        async def process():
+            await telegram_app.initialize()  # ✅ Properly initialize the bot
+            update = Update.de_json(json_data, telegram_app.bot)
+            await telegram_app.process_update(update)
+
+        asyncio.run(process())
         return 'OK'
     except Exception as e:
         logging.error(f"Webhook error: {e}")
         return 'ERROR', 500
+
 
 @app.route('/health')
 def health():
