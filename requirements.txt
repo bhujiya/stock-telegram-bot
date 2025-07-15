@@ -1,8 +1,6 @@
-python-telegram-bot==20.7
-yfinance==0.2.36
-numpy==1.24.3
+requests
+yfinance
 pandas==1.5.3
 pandas-ta==0.3.14b0
-requests
-setuptools
-wheel
+openai
+python-telegram-bot==13.15
