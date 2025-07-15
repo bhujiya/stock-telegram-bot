@@ -1,17 +1,21 @@
 import logging
 import yfinance as yf
 import requests
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import os
 import pandas as pd
 import numpy as np
+from flask import Flask, request
+import asyncio
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL_ID = "google/gemma-3n-e2b-it:free"
 
 logging.basicConfig(level=logging.INFO)
+
+app = Flask(__name__)
 
 def calculate_rsi(prices, period=14):
     """Calculate RSI manually"""
@@ -37,14 +41,12 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         symbol = update.message.text.upper().strip()
         
-        # Basic validation
         if not symbol or len(symbol) < 2:
             await update.message.reply_text("Please provide a valid stock symbol (e.g., TCS.NS, INFY.NS)")
             return
         
         await update.message.reply_text(f"🔍 Analyzing {symbol}... Please wait.")
         
-        # Fetch stock data
         stock = yf.Ticker(symbol)
         
         try:
@@ -59,7 +61,6 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ No data found for {symbol}. Please check the symbol.")
             return
 
-        # Calculate technical indicators
         try:
             rsi_values = calculate_rsi(hist["Close"])
             macd_values, signal_values = calculate_macd(hist["Close"])
@@ -68,7 +69,6 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rsi_values = pd.Series([np.nan] * len(hist))
             macd_values = pd.Series([np.nan] * len(hist))
 
-        # Extract values safely
         rsi = "N/A"
         macd_val = "N/A"
         
@@ -80,7 +80,6 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.error(f"Error extracting indicator values: {e}")
 
-        # Create prompt
         prompt = f"""
 You're an AI stock analyst. Give a Buy/Sell/Hold recommendation for:
 
@@ -95,7 +94,6 @@ MACD: {macd_val}
 Provide a brief analysis in simple words with your recommendation.
 """
 
-        # Call OpenRouter API
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json"
@@ -129,31 +127,30 @@ Provide a brief analysis in simple words with your recommendation.
         logging.error(f"Unexpected error in analyze: {e}")
         await update.message.reply_text("❌ An unexpected error occurred. Please try again.")
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Log errors caused by Updates."""
-    logging.error(f"Update {update} caused error {context.error}")
+# Create telegram application
+telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze))
 
-def main():
-    if not TELEGRAM_TOKEN:
-        logging.error("TELEGRAM_TOKEN not found in environment variables")
-        return
-    
-    if not OPENROUTER_API_KEY:
-        logging.error("OPENROUTER_API_KEY not found in environment variables")
-        return
-    
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    # Add handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze))
-    
-    # Add error handler
-    app.add_error_handler(error_handler)
-    
-    # Start the bot
-    logging.info("Starting bot...")
-    app.run_polling()
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle webhook updates"""
+    try:
+        update = Update.de_json(request.get_json(), telegram_app.bot)
+        asyncio.run(telegram_app.process_update(update))
+        return 'OK'
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        return 'ERROR', 500
+
+@app.route('/health')
+def health():
+    return 'Bot is running'
+
+@app.route('/')
+def index():
+    return 'Stock Analysis Telegram Bot is running!'
 
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
