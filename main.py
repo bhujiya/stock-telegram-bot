@@ -96,7 +96,7 @@ Provide a brief analysis in simple words with your recommendation.
 """
 
         try:
-            response = openai.ChatCompletion.create(
+            response = openai.chatCompletion.create(
                 model=MODEL_ID,
                 messages=[{"role": "user", "content": prompt}],
                 timeout=30
