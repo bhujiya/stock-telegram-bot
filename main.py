@@ -101,7 +101,7 @@ Provide a brief analysis in simple words with your recommendation.
                 messages=[{"role": "user", "content": prompt}],
             
             )
-            msg = response.choices[0].message["content"]
+            msg = response.choices[0].message.content
             await update.message.reply_text(f"📈 {symbol}:\n\n{msg}")
 
         except Exception as e:
