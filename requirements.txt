@@ -1,6 +1,5 @@
 requests
-yfinance
+yfinance==0.2.36
 pandas==1.5.3
 pandas-ta==0.3.14b0
-openai
 python-telegram-bot==13.15
