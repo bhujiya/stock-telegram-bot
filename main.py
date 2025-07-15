@@ -9,6 +9,8 @@ import numpy as np
 from flask import Flask, request
 import asyncio
 import openai
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -128,32 +130,49 @@ telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze))
 
-# Global variable to track initialization
-app_initialized = False
+# Initialize the app at startup
+async def initialize_app():
+    await telegram_app.initialize()
+
+# Run initialization in a separate thread
+def run_initialization():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(initialize_app())
+    loop.close()
+
+# Initialize at startup
+init_thread = threading.Thread(target=run_initialization)
+init_thread.start()
+init_thread.join()
+
+# Thread pool for handling webhook requests
+executor = ThreadPoolExecutor(max_workers=5)
+
+def process_update_sync(json_data):
+    """Process update in a separate thread with its own event loop"""
+    def run_async():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            update = Update.de_json(json_data, telegram_app.bot)
+            loop.run_until_complete(telegram_app.process_update(update))
+        except Exception as e:
+            logging.error(f"Error processing update: {e}")
+        finally:
+            loop.close()
+    
+    return run_async()
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    global app_initialized
     try:
         json_data = request.get_json(force=True)
-
-        async def process():
-            global app_initialized
-            
-            # Initialize the app only once
-            if not app_initialized:
-                await telegram_app.initialize()
-                app_initialized = True
-            
-            update = Update.de_json(json_data, telegram_app.bot)
-            await telegram_app.process_update(update)
-
-        # Run the async function
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(process())
-        loop.close()
-
+        
+        # Process the update in a separate thread
+        future = executor.submit(process_update_sync, json_data)
+        # Don't wait for completion to avoid blocking
+        
         return 'OK'
     except Exception as e:
         logging.error(f"Webhook error: {e}")
