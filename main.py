@@ -1,16 +1,34 @@
 import logging
 import yfinance as yf
-import pandas_ta as ta
 import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 import os
+import pandas as pd
+import numpy as np
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL_ID = "google/gemma-3n-e2b-it:free"
 
 logging.basicConfig(level=logging.INFO)
+
+def calculate_rsi(prices, period=14):
+    """Calculate RSI manually"""
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_macd(prices, fast=12, slow=26, signal=9):
+    """Calculate MACD manually"""
+    ema_fast = prices.ewm(span=fast).mean()
+    ema_slow = prices.ewm(span=slow).mean()
+    macd = ema_fast - ema_slow
+    signal_line = macd.ewm(span=signal).mean()
+    return macd, signal_line
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hi! Send a stock symbol like TCS.NS or INFY.NS to get AI stock analysis.")
@@ -43,22 +61,22 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Calculate technical indicators
         try:
-            hist["RSI"] = ta.rsi(hist["Close"])
-            macd = ta.macd(hist["Close"])
-            if macd is not None:
-                hist = hist.join(macd)
+            rsi_values = calculate_rsi(hist["Close"])
+            macd_values, signal_values = calculate_macd(hist["Close"])
         except Exception as e:
             logging.error(f"Error calculating indicators: {e}")
+            rsi_values = pd.Series([np.nan] * len(hist))
+            macd_values = pd.Series([np.nan] * len(hist))
 
         # Extract values safely
         rsi = "N/A"
         macd_val = "N/A"
         
         try:
-            if "RSI" in hist and not hist["RSI"].dropna().empty:
-                rsi = round(hist["RSI"].dropna().iloc[-1], 2)
-            if "MACD_12_26_9" in hist and not hist["MACD_12_26_9"].dropna().empty:
-                macd_val = round(hist["MACD_12_26_9"].dropna().iloc[-1], 2)
+            if not rsi_values.dropna().empty:
+                rsi = round(rsi_values.dropna().iloc[-1], 2)
+            if not macd_values.dropna().empty:
+                macd_val = round(macd_values.dropna().iloc[-1], 4)
         except Exception as e:
             logging.error(f"Error extracting indicator values: {e}")
 
