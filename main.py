@@ -127,10 +127,8 @@ def webhook():
             update = Update.de_json(json_data, telegram_app.bot)
             await telegram_app.process_update(update)
 
-        loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-loop.run_until_complete(process())
-loop.close()
+        asyncio.run(process())
+
 
         return 'OK'
     except Exception as e:
