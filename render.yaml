@@ -3,4 +3,9 @@ services:
     name: stock-telegram-bot
     env: python
     buildCommand: ./build.sh
-    startCommand: python main.py
+    startCommand: python Main.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
