@@ -96,7 +96,7 @@ Provide a brief analysis in simple words with your recommendation.
 """
 
         try:
-            response = openai.chatcompletion.create(
+            response = openai.chat.completion.create(
                 model=MODEL_ID,
                 messages=[{"role": "user", "content": prompt}],
             
