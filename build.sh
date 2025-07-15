@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-# Install system-level build tools
+# Install system-level dependencies
 apt-get update && apt-get install -y build-essential
 
-# Upgrade pip and install wheel + setuptools
-pip install --upgrade pip setuptools wheel
+# Pre-install setuptools so metadata errors don’t happen
+pip install setuptools==67.6.0 wheel --upgrade
 
-# Install dependencies from requirements.txt
+# Install the rest
 pip install -r requirements.txt
